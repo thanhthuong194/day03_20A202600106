@@ -1,10 +1,19 @@
 import pandas as pd
-import json
+import io
+import re
 
-def fetch_interest_rates(bank_name: str, type_rate: str = "online") -> str:
+def extract_number(text):
+    """Hàm phụ trợ để tách lấy con số lãi suất từ chuỗi rác"""
+    match = re.search(r"(\d+\.\d+|\d+)", str(text))
+    if match:
+        return match.group(1)
+    return str(text)
+
+def fetch_interest_rates(bank_name: str = "all", type_rate: str = "online") -> str:
     """
-    Công cụ cào dữ liệu lãi suất thực tế từ trang Techcombank
-    type_rate: 'online' hoặc 'tai_quay'
+    Công cụ cào dữ liệu lãi suất từ Techcombank và trả về dạng CSV.
+    - bank_name: Tên ngân hàng (VD: 'VPBank') hoặc truyền 'all' để lấy tất cả.
+    - type_rate: 'online' hoặc 'tai_quay'
     """
     url = "https://techcombank.com/thong-tin/blog/lai-suat-tiet-kiem"
     
@@ -12,27 +21,34 @@ def fetch_interest_rates(bank_name: str, type_rate: str = "online") -> str:
         # Pandas sẽ lấy tất cả các bảng trên trang web
         tables = pd.read_html(url)
         
-        # Dựa vào thứ tự trên trang, Bảng 0 thường là bảng ví dụ, 
-        # Bảng 1 là Lãi suất tại quầy, Bảng 2 là Lãi suất Online.
-        if type_rate == "online":
-            df = tables[2] # Bảng số 3 (index 2)
-        else:
-            df = tables[1] # Bảng số 2 (index 1)
+        # Tự động lọc ra những bảng có đúng 8 cột (bảng lãi suất chuẩn)
+        valid_tables = [table for table in tables if len(table.columns) == 8]
+        
+        if len(valid_tables) < 2:
+            return "Lỗi: Không tìm thấy đủ bảng lãi suất trên web."
             
-        # Làm sạch dữ liệu: Xóa các cột/hàng bị NaN hoặc định dạng lại
-        # (Bạn có thể in df ra để xem cấu trúc và map cột cho đúng)
+        # Trong các bảng chuẩn: Bảng 1 (index 0) là Tại quầy, Bảng 2 (index 1) là Online
+        if type_rate == "online":
+            df = valid_tables[1].copy()
+        else:
+            df = valid_tables[0].copy()
+            
+        # Gán tên cột
         df.columns = ["Ngan_hang", "1_thang", "3_thang", "6_thang", "12_thang", "18_thang", "24_thang", "36_thang"]
         
-        # Tìm ngân hàng theo tên
-        # Lọc ra dòng chứa tên ngân hàng (không phân biệt hoa thường)
-        bank_data = df[df['Ngan_hang'].str.contains(bank_name, case=False, na=False)]
+        # Làm sạch dữ liệu: Chỉ giữ lại các con số lãi suất
+        cols_to_clean = ["1_thang", "3_thang", "6_thang", "12_thang", "18_thang", "24_thang", "36_thang"]
+        for col in cols_to_clean:
+            df[col] = df[col].apply(extract_number)
         
-        if bank_data.empty:
-            return f"Không tìm thấy dữ liệu cho ngân hàng {bank_name}."
-            
-        # Chuyển dòng dữ liệu tìm được thành dictionary/JSON
-        result = bank_data.to_dict(orient="records")[0]
-        return json.dumps(result, ensure_ascii=False)
+        # Nếu người dùng muốn lọc một ngân hàng cụ thể
+        if bank_name.lower() != "all":
+            df = df[df['Ngan_hang'].str.contains(bank_name, case=False, na=False)]
+            if df.empty:
+                return f"Lỗi: Không tìm thấy dữ liệu cho ngân hàng {bank_name}."
+                
+        # Trả về toàn bộ dữ liệu dưới định dạng CSV (chuỗi văn bản)
+        return df.to_csv(index=False)
         
     except Exception as e:
         return f"Lỗi khi cào dữ liệu: {str(e)}"
@@ -40,34 +56,35 @@ def fetch_interest_rates(bank_name: str, type_rate: str = "online") -> str:
 # Cấu hình Tool Spec cho ReAct Agent
 BANK_SCRAPE_TOOL = {
     "name": "fetch_interest_rates",
-    "description": "Lấy bảng lãi suất tiền gửi của các ngân hàng tại Việt Nam (kỳ hạn 1-36 tháng). Truyền vào 2 tham số: bank_name (tên ngân hàng, VD: 'VPBank', 'Vietcombank') và type_rate ('online' hoặc 'tai_quay').",
+    "description": "Lấy bảng lãi suất tiền gửi dạng CSV. Truyền bank_name='all' để lấy toàn bộ, hoặc tên riêng (VD: 'MBBank'). Tham số type_rate='online' hoặc 'tai_quay'.",
     "function": fetch_interest_rates
 }
 
 # ========================================================
-# THÊM CODE TEST Ở ĐÂY ĐỂ CHẠY THỬ ĐỘC LẬP
+# CODE TEST VỚI PANDAS ĐỂ VIEW CSV
 # ========================================================
 if __name__ == "__main__":
-    print("=== BẮT ĐẦU TEST CÔNG CỤ CÀO DỮ LIỆU LÃI SUẤT ===")
+    print("=== BẮT ĐẦU TEST CÔNG CỤ (TRẢ VỀ CSV) ===")
     
-    # Test case 1: Tìm lãi suất Online của Vietcombank
-    print("\n1. Đang lấy lãi suất ONLINE của Vietcombank...")
-    kq_vcb_online = fetch_interest_rates(bank_name="Vietcombank", type_rate="online")
-    print(kq_vcb_online)
+    # 1. Gọi tool để lấy data dưới dạng chuỗi CSV (giả lập việc Agent dùng tool)
+    print("\n1. Đang cào toàn bộ dữ liệu lãi suất ONLINE...")
+    csv_string = fetch_interest_rates(bank_name="all", type_rate="online")
     
-    # Test case 2: Tìm lãi suất Tại quầy của Techcombank
-    print("\n2. Đang lấy lãi suất TẠI QUẦY của Techcombank...")
-    kq_tcb_taiquay = fetch_interest_rates(bank_name="Techcombank", type_rate="tai_quay")
-    print(kq_tcb_taiquay)
-    
-    # Test case 3: Tìm lãi suất Online của MBBank
-    print("\n3. Đang lấy lãi suất ONLINE của MBBank...")
-    kq_mb_online = fetch_interest_rates(bank_name="MBBank", type_rate="online")
-    print(kq_mb_online)
-    
-    # Test case 4: Thử một ngân hàng không tồn tại để xem báo lỗi
-    print("\n4. Đang thử nghiệm với ngân hàng không tồn tại (ABCBank)...")
-    kq_loi = fetch_interest_rates(bank_name="ABCBank", type_rate="online")
-    print(kq_loi)
-    
+    # 2. Dùng Pandas để view chuỗi CSV đó thay vì in chay
+    if not csv_string.startswith("Lỗi"):
+        # Dùng io.StringIO để biến chuỗi string thành một file-like object cho pandas đọc
+        df_view = pd.read_csv(io.StringIO(csv_string))
+        
+        print("\n>> DỮ LIỆU ĐÃ ĐƯỢC CHUYỂN THÀNH PANDAS DATAFRAME ĐỂ VIEW:\n")
+        
+        # Cài đặt để hiển thị đẹp hơn trên terminal
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', 1000)
+        
+        # In ra 10 ngân hàng đầu tiên để kiểm tra
+        print(df_view.head(10))
+        print(f"\n[Thông tin] Đã lấy thành công {len(df_view)} ngân hàng.")
+    else:
+        print(csv_string)
+        
     print("\n=== HOÀN THÀNH TEST ===")
