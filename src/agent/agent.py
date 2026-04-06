@@ -1,10 +1,9 @@
 import os
 import re
-import json
+import json 
 from typing import List, Dict, Any, Optional
 from src.core.llm_provider import LLMProvider
 from src.telemetry.logger import logger
-from src.telemetry.metrics import tracker
 
 class ReActAgent:
     """
@@ -19,162 +18,105 @@ class ReActAgent:
         self.history = []
 
     def get_system_prompt(self) -> str:
-        """
-        TODO: Implement the system prompt that instructs the agent to follow ReAct.
-        Should include:
-        1.  Available tools and their descriptions.
-        2.  Format instructions: Thought, Action, Observation.
-        """
         tool_descriptions = "\n".join([f"- {t['name']}: {t['description']}" for t in self.tools])
         return f"""
         You are an intelligent assistant. You have access to the following tools:
         {tool_descriptions}
 
-        Use the following format:
-        Thought: your line of reasoning.
-        Action: tool_name(<JSON arguments or a plain string>)
-        Observation: result of the tool call.
-        ... (repeat Thought/Action/Observation if needed)
-        Final Answer: your final response.
+        IMPORTANT RULES:
+        1. After you output an 'Action', you MUST STOP and wait for an 'Observation'. 
+        2. NEVER guess or hallucinate the result of an Action. 
+        3. NEVER write the 'Observation' yourself. The system will provide it to you.
+        4. Each step should only contain ONE Thought and ONE Action.
 
-        Rules:
-        - If calling a tool, prefer JSON arguments (no markdown, no backticks).
-        - Use only tools listed above.
-        - After you have enough info, respond with "Final Answer:" and stop.
+        Use the following format strictly:
+        Question: the input question you must answer
+        Thought: your line of reasoning.
+        Action: tool_name({{"arg1": "value1"}})
+        (Wait for Observation here)
+        Final Answer: your final response to the user.
         """
 
     def run(self, user_input: str) -> str:
         """
-        TODO: Implement the ReAct loop logic.
+        Implement the ReAct loop logic.
         1. Generate Thought + Action.
         2. Parse Action and execute Tool.
         3. Append Observation to prompt and repeat until Final Answer.
         """
         logger.log_event("AGENT_START", {"input": user_input, "model": self.llm.model_name})
         
-        system_prompt = self.get_system_prompt()
-        current_prompt = user_input.strip()
+        # Khởi tạo ngữ cảnh (context) ban đầu với câu hỏi của người dùng
+        current_prompt = f"Question: {user_input}\n"
         steps = 0
 
         while steps < self.max_steps:
-            result = self.llm.generate(current_prompt, system_prompt=system_prompt)
-            content = (result.get("content") or "").strip()
-
-            # Telemetry
-            try:
-                tracker.track_request(
-                    provider=str(result.get("provider", "unknown")),
-                    model=self.llm.model_name,
-                    usage=result.get("usage") or {},
-                    latency_ms=int(result.get("latency_ms") or 0),
-                )
-            except Exception:
-                pass
-
-            logger.log_event(
-                "AGENT_STEP",
-                {
-                    "step": steps + 1,
-                    "prompt": current_prompt,
-                    "llm_output": content,
-                },
-            )
-
-            final = self._extract_final_answer(content)
-            if final is not None:
-                logger.log_event("AGENT_FINAL", {"step": steps + 1, "final": final})
-                logger.log_event("AGENT_END", {"steps": steps + 1})
-                return final
-
-            action = self._extract_action(content)
-            if action is None:
-                # If model doesn't follow the protocol, return what it said (better than looping).
-                logger.log_event("AGENT_END", {"steps": steps + 1, "reason": "no_action_no_final"})
-                return content or "No response."
-
-            tool_name, raw_args = action
-            observation = self._execute_tool(tool_name, raw_args)
-            logger.log_event(
-                "TOOL_OBSERVATION",
-                {"step": steps + 1, "tool": tool_name, "args": raw_args, "observation": observation},
-            )
-
-            current_prompt = (
-                f"{current_prompt}\n\n{content}\nObservation: {observation}\n"
-            )
+            print(f"--- Bước {steps + 1} ---")
+            
+            # 1. Gọi LLM sinh ra suy luận (Thought) và Hành động (Action)
+            response_dict = self.llm.generate(current_prompt, system_prompt=self.get_system_prompt())
+            result = response_dict["content"]
+            print(f"LLM Output:\n{result}\n")
+            
+            # Cập nhật kết quả LLM vào lịch sử (như một trí nhớ)
+            current_prompt += f"{result}\n"
+            
+            # 2. Kiểm tra xem LLM đã ra được câu trả lời cuối cùng chưa?
+            # Dùng regex để tìm chuỗi bắt đầu bằng "Final Answer:"
+            final_answer_match = re.search(r'Final Answer:(.*)', result, re.IGNORECASE | re.DOTALL)
+            if final_answer_match:
+                final_answer = final_answer_match.group(1).strip()
+                logger.log_event("AGENT_END", {"steps": steps + 1, "status": "success"})
+                return final_answer
+            
+            # 3. Nếu chưa có Final Answer, kiểm tra xem LLM có gọi Tool (Action) không?
+            # Pattern: Action: ten_tool(tham_so)
+            action_match = re.search(r'Action:\s*([a-zA-Z0-9_]+)\((.*?)\)', result, re.IGNORECASE)
+            
+            if action_match:
+                tool_name = action_match.group(1).strip()
+                args_str = action_match.group(2).strip()
+                
+                # Gọi hàm thực thi Tool
+                observation = self._execute_tool(tool_name, args_str)
+                print(f"Observation: {observation}\n")
+                
+                # Gắn kết quả (Observation) vào lịch sử để LLM đọc ở vòng lặp tiếp theo
+                current_prompt += f"Observation: {observation}\n"
+            else:
+                # Nếu LLM nói linh tinh, không có Action cũng không có Final Answer
+                current_prompt += "Observation: Lỗi format. Hãy đưa ra 'Action:' hoặc 'Final Answer:'.\n"
             
             steps += 1
             
-        logger.log_event("AGENT_END", {"steps": steps, "reason": "max_steps_exceeded"})
-        return "Final Answer: I couldn't finish within the step limit. Please refine the query or increase max_steps."
+        logger.log_event("AGENT_END", {"steps": steps, "status": "max_steps_reached"})
+        return "Xin lỗi, tôi đã suy nghĩ quá lâu (vượt giới hạn số bước) mà chưa tìm ra câu trả lời."
 
-    def _execute_tool(self, tool_name: str, args: str) -> str:
+    def _execute_tool(self, tool_name: str, args_str: str) -> str:
         """
         Helper method to execute tools by name.
         """
+
         for tool in self.tools:
             if tool['name'] == tool_name:
-                fn = tool.get("func")
-                if not callable(fn):
-                    return f"Tool {tool_name} is not callable."
-
+                
+                # Lấy ra hàm (function) thực tế bằng Python đã được map trong dict
+                func = tool.get('function')
+                if not func:
+                    return f"Lỗi: Công cụ '{tool_name}' không được cấu hình hàm thực thi (key 'function')."
+                
                 try:
-                    parsed = self._parse_tool_args(args)
-                    if isinstance(parsed, dict):
-                        return str(fn(**parsed))
-                    if isinstance(parsed, list):
-                        return str(fn(*parsed))
-                    # scalar (string/number/bool/None)
-                    return str(fn(parsed))
-                except TypeError as e:
-                    return f"Tool call argument mismatch: {e}"
+                    # Ép kiểu chuỗi arguments (từ LLM) thành Dictionary
+                    args_dict = {}
+                    if args_str:
+                        args_dict = json.loads(args_str)
+                    
+                    result = func(**args_dict)
+                    return str(result)
+                    
+                except json.JSONDecodeError:
+                    return f"Lỗi Observation: Cú pháp tham số không hợp lệ. Tham số phải là chuẩn JSON. Bạn (LLM) đã truyền: {args_str}"
                 except Exception as e:
-                    return f"Tool execution failed: {type(e).__name__}: {e}"
-        return f"Tool {tool_name} not found."
-
-    def _extract_action(self, text: str) -> Optional[tuple[str, str]]:
-        """
-        Extract the last Action line: Action: tool_name(...)
-        Returns (tool_name, raw_args_inside_parentheses_or_raw)
-        """
-        # Prefer explicit "Action:" protocol lines.
-        matches = re.findall(r"Action\s*:\s*([a-zA-Z0-9_]+)\((.*)\)\s*$", text, flags=re.MULTILINE)
-        if matches:
-            tool_name, raw = matches[-1]
-            return tool_name.strip(), raw.strip()
-
-        # Fallback: a single-line tool call without "Action:"
-        m = re.search(r"^\s*([a-zA-Z0-9_]+)\((.*)\)\s*$", text, flags=re.MULTILINE)
-        if m:
-            return m.group(1).strip(), m.group(2).strip()
-
-        return None
-
-    def _extract_final_answer(self, text: str) -> Optional[str]:
-        m = re.search(r"Final Answer\s*:\s*(.*)\s*$", text, flags=re.IGNORECASE | re.DOTALL)
-        if not m:
-            return None
-        return m.group(1).strip()
-
-    def _parse_tool_args(self, raw: str) -> Any:
-        """
-        Parse tool args. Supports:
-        - JSON object: {"a":1}
-        - JSON array: [1,2]
-        - JSON string/number/bool/null: "x", 1, true
-        - Otherwise: treat as a plain string (stripped of wrapping quotes if present)
-        """
-        s = (raw or "").strip()
-        if not s:
-            return {}
-
-        # Try JSON first
-        try:
-            return json.loads(s)
-        except Exception:
-            pass
-
-        # Strip wrapping quotes for simple cases
-        if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-            return s[1:-1]
-        return s
+                    return f"Lỗi Observation trong khi chạy tool: {str(e)}"
+                f
+        return f"Observation: Tool '{tool_name}' không tồn tại. Vui lòng kiểm tra lại tên tool."

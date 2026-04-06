@@ -1,132 +1,82 @@
 # calculate.py
 
-from typing import Tuple, Dict
-
-
-def calculate_simple_interest(amount: float, rate: float, duration: int) -> Tuple[float, float]:
+def calculate_savings_interest(principal: float, rate_percent: float, months: int) -> str:
     """
-    Lãi đơn
-    amount: số tiền (VND)
-    rate: %/năm
-    duration: tháng
+    Công cụ tính tiền lãi gửi tiết kiệm ngân hàng (lãi đơn nhận cuối kỳ).
+    
+    Args:
+        principal (float): Số tiền gốc gửi vào (VNĐ). Ví dụ: 200000000.
+        rate_percent (float): Lãi suất năm (%). Ví dụ: 4.6 (lấy từ bảng lãi suất).
+        months (int): Số tháng gửi (kỳ hạn). Ví dụ: 12.
+        
+    Returns:
+        str: Chuỗi văn bản báo cáo chi tiết số tiền lãi và tổng tiền nhận được.
     """
-    interest = amount * (rate / 100) * (duration / 12)
-    total = amount + interest
-    return interest, total
+    try:
+        # Ép kiểu dữ liệu để phòng trường hợp LLM truyền nhầm string
+        principal = float(principal)
+        rate_percent = float(rate_percent)
+        months = int(months)
 
+        if principal <= 0 or rate_percent < 0 or months <= 0:
+            return "Lỗi: Số tiền gốc, lãi suất và số tháng phải lớn hơn 0."
 
-def calculate_compound_interest(amount: float, rate: float, duration: int, n: int = 1) -> Tuple[float, float]:
-    """
-    Lãi kép
-    n: số lần nhập gốc mỗi năm
-    """
-    t = duration / 12
-    total = amount * (1 + (rate / 100) / n) ** (n * t)
-    interest = total - amount
-    return interest, total
+        # Công thức tính lãi cuối kỳ chuẩn: 
+        # Lãi = Gốc * (Lãi suất / 100) * (Số tháng / 12)
+        interest_earned = principal * (rate_percent / 100) * (months / 12)
+        total_amount = principal + interest_earned
 
+        # Format số tiền kiểu Việt Nam (ví dụ: 1.000.000 thay vì 1,000,000)
+        def format_vnd(amount):
+            return "{:,.0f}".format(amount).replace(',', '.')
 
-def calculate_early_withdraw(amount: float, withdraw_time: int, rate: float = 0.2) -> Tuple[float, float]:
-    """
-    Rút trước hạn → lãi không kỳ hạn (~0.2%)
-    """
-    interest = amount * (rate / 100) * (withdraw_time / 12)
-    total = amount + interest
-    return interest, total
-
-
-def calculate_partial_withdraw(
-    total_amount: float,
-    withdraw_amount: float,
-    withdraw_time: int,
-    duration: int,
-    rate: float
-) -> Dict:
-    """
-    Rút một phần:
-    - phần rút → lãi không kỳ hạn
-    - phần còn lại → giữ lãi kỳ hạn
-    """
-
-    remaining_amount = total_amount - withdraw_amount
-
-    # phần rút
-    interest_withdraw, total_withdraw = calculate_early_withdraw(
-        withdraw_amount, withdraw_time
-    )
-
-    # phần còn lại
-    interest_remaining, total_remaining = calculate_simple_interest(
-        remaining_amount, rate, duration
-    )
-
-    return {
-        "withdraw_part": {
-            "amount": withdraw_amount,
-            "interest": interest_withdraw,
-            "total": total_withdraw
-        },
-        "remaining_part": {
-            "amount": remaining_amount,
-            "interest": interest_remaining,
-            "total": total_remaining
-        },
-        "total_interest": interest_withdraw + interest_remaining,
-        "total_amount": total_withdraw + total_remaining
-    }
-
-
-def calculate(
-    amount: float,
-    rate: float,
-    duration: int,
-    interest_type: str = "simple",
-    withdraw_time: int = None,
-    withdraw_amount: float = None
-) -> Dict:
-    """
-    Hàm tổng (main API)
-    """
-
-    # 🔴 Rút trước hạn toàn bộ
-    if withdraw_time is not None and withdraw_amount is None:
-        interest, total = calculate_early_withdraw(amount, withdraw_time)
-        return {
-            "type": "early_withdraw",
-            "interest": interest,
-            "total": total
-        }
-
-    # 🟡 Rút một phần
-    if withdraw_amount is not None:
-        return calculate_partial_withdraw(
-            amount,
-            withdraw_amount,
-            withdraw_time,
-            duration,
-            rate
+        # Chuỗi kết quả trả về cho Agent đọc và tổng hợp
+        result = (
+            f"[BÁO CÁO TÍNH TOÁN]\n"
+            f"- Tiền gốc: {format_vnd(principal)} VNĐ\n"
+            f"- Lãi suất áp dụng: {rate_percent}%/năm\n"
+            f"- Kỳ hạn gửi: {months} tháng\n"
+            f"=> Tiền lãi sinh ra: {format_vnd(interest_earned)} VNĐ\n"
+            f"=> TỔNG TIỀN NHẬN CUỐI KỲ (Gốc + Lãi): {format_vnd(total_amount)} VNĐ"
         )
+        return result
 
-    # 🟢 Bình thường
-    if interest_type == "compound":
-        interest, total = calculate_compound_interest(amount, rate, duration)
-    else:
-        interest, total = calculate_simple_interest(amount, rate, duration)
+    except ValueError:
+         return "Lỗi: Agent truyền sai định dạng dữ liệu. Yêu cầu truyền số thuần túy (không chứa chữ hoặc ký tự tiền tệ)."
+    except Exception as e:
+        return f"Lỗi hệ thống khi tính toán: {str(e)}"
 
-    return {
-        "type": "normal",
-        "interest": interest,
-        "total": total
-    }
+# ========================================================
+# CẤU HÌNH TOOL SPEC CHO AGENT
+# ========================================================
+CALCULATE_INTEREST_TOOL = {
+    "name": "calculate_savings_interest",
+    "description": (
+        "Sử dụng công cụ này để tính tiền lãi tiết kiệm ngân hàng một cách chính xác. "
+        "Yêu cầu 3 tham số: 'principal' (tiền gốc, chỉ nhập số, không chữ), "
+        "'rate_percent' (lãi suất năm %, ví dụ 4.5), và 'months' (số tháng gửi)."
+    ),
+    "function": calculate_savings_interest
+}
 
-
-# 🧪 Test nhanh
+# ========================================================
+# CODE TEST (Chạy trực tiếp file này để kiểm tra)
+# ========================================================
 if __name__ == "__main__":
-    # Case 1: bình thường
-    print(calculate(100_000_000, 6.0, 6))
-
-    # Case 2: rút sớm
-    print(calculate(100_000_000, 6.0, 6, withdraw_time=2))
-
-    # Case 3: partial withdraw
-    print(calculate(100_000_000, 6.0, 6, withdraw_time=2, withdraw_amount=40_000_000))
+    print("=== BẮT ĐẦU TEST CÔNG CỤ TÍNH TOÁN ===\n")
+    
+    # Giả lập LLM truyền dữ liệu vào sau khi đã cào được mức 4.6% cho 12 tháng
+    tien_goc = 250000000  # 250 triệu
+    lai_suat = 4.6
+    ky_han = 12
+    
+    print(f"Giả lập: Tính lãi cho {tien_goc} VNĐ, lãi suất {lai_suat}%, kỳ hạn {ky_han} tháng...\n")
+    
+    ket_qua = calculate_savings_interest(
+        principal=tien_goc, 
+        rate_percent=lai_suat, 
+        months=ky_han
+    )
+    
+    print(ket_qua)
+    print("\n=== HOÀN THÀNH TEST ===")
