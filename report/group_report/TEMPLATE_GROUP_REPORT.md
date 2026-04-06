@@ -26,8 +26,8 @@
 | `bank_tools` |  | Search all banks’ interest rates at the present. |
 
 ### 2.3 LLM Providers Used
-- **Primary**: [e.g., GPT-4o]
-- **Secondary (Backup)**: [e.g., Gemini 1.5 Flash]
+- **Primary**: GPT-4o-mini (Azure Inference API)
+- **Secondary (Backup)**: Gemini 1.5 Flash & Phi-3 Mini (Local GGUF via llama-cpp)
 
 ---
 
