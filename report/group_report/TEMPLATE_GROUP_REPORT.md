@@ -1,9 +1,8 @@
 # Group Report: Lab 3 - Production-Grade Agentic System
 
-- **Team Name**: [Name]
-- **Team Members**: [Member 1, Member 2, ...]
-- **Deployment Date**: [YYYY-MM-DD]
-
+- **Team Name**: 
+- **Team Members**: Hồ Bảo Thư, Lê Thanh Thưởng, Nguyễn Đình Hiếu, Trần Văn Tuấn, Lê Đình Việt, Lê Văn Tùng
+- **Deployment Date**: 2026-04-06
 ---
 
 ## 1. Executive Summary
