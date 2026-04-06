@@ -263,7 +263,7 @@ BANK_SCRAPE_TOOL = {
 # ========================================================
 # CODE TEST
 # ========================================================
-if _name_ == "_main_":
+if __name__ == "__main__":
     print("=== BẮT ĐẦU TEST CÔNG CỤ (PLAYWRIGHT + POLARS) ===\n")
     print("Đang cào và giải mã dữ liệu... \n")
     
